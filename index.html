@@ -676,10 +676,22 @@ body::after {
       <button class="tc-btn tc-pause" onclick="stopTimer()">⏸ Pause</button>
       <button class="tc-btn tc-next" onclick="nextSegment()">⏭ Next</button>
     </div>
-    <div class="injury-wrap">
-      <button class="tc-btn tc-added" onclick="addInjuryTime()" style="max-width:200px; font-size:11px;">
-        +⏱ Injury Time (<span id="addedDisplay">0</span>min)
-      </button>
+    <div class="injury-wrap" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px;">
+      <button class="tc-btn tc-added" onclick="addInjuryTime(1)" style="flex:1;max-width:72px;font-size:12px;padding:9px 6px;">+1⏱</button>
+      <button class="tc-btn tc-added" onclick="addInjuryTime(2)" style="flex:1;max-width:72px;font-size:12px;padding:9px 6px;">+2⏱</button>
+      <button class="tc-btn tc-added" onclick="addInjuryTime(3)" style="flex:1;max-width:72px;font-size:12px;padding:9px 6px;">+3⏱</button>
+      <button class="tc-btn tc-added" onclick="addInjuryTime(5)" style="flex:1;max-width:72px;font-size:12px;padding:9px 6px;">+5⏱</button>
+      <button class="tc-btn" onclick="showSkipTimer()" style="flex:1;max-width:90px;font-size:11px;padding:9px 6px;background:rgba(74,158,255,0.08);border-color:rgba(74,158,255,0.35);color:var(--blue);">⏩ Skip</button>
+    </div>
+    <div id="skipTimerPanel" style="display:none;margin-top:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(74,158,255,0.25);border-radius:10px;padding:12px;">
+      <div style="font-family:var(--font-d);font-size:10px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--text4);margin-bottom:10px;">Set timer to minute…</div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="number" id="skipMinInput" min="0" max="120" placeholder="e.g. 23"
+          style="flex:1;font-family:var(--font-d);font-size:28px;font-weight:900;background:rgba(255,255,255,0.06);border:1px solid rgba(74,158,255,0.35);border-radius:8px;color:var(--text);padding:8px 12px;outline:none;text-align:center;">
+        <button onclick="applySkipTimer()" style="font-family:var(--font-d);font-size:13px;font-weight:800;letter-spacing:0.08em;background:rgba(74,158,255,0.15);border:1px solid rgba(74,158,255,0.4);color:var(--blue);border-radius:8px;padding:10px 16px;cursor:pointer;">Go</button>
+        <button onclick="hideSkipTimer()" style="font-family:var(--font-d);font-size:13px;font-weight:800;background:rgba(255,255,255,0.04);border:1px solid var(--border2);color:var(--text3);border-radius:8px;padding:10px 12px;cursor:pointer;">✕</button>
+      </div>
+      <div id="skipTimerHint" style="font-size:11px;color:var(--text3);margin-top:7px;"></div>
     </div>
     <div class="vib-label" id="vibLabel">🔔 Vibrate on segment end: <span id="vibStatus">On</span></div>
   </div>
@@ -1020,18 +1032,21 @@ function applyPreset(key) {
 // SETTINGS
 // ═══════════════════════════════════════════════
 function onSettingChange() {
-  if (state.running) stopTimer();
   const n   = parseInt(document.getElementById('setNumSegs').value) || 2;
   const dur = parseInt(document.getElementById('setSegDur').value) || 25;
   const add = parseInt(document.getElementById('setAddedTime').value) || 0;
   const dir = document.getElementById('setDirection').value;
-  state.totalSegs   = Math.min(8, Math.max(1, n));
-  state.segDuration = dur * 60;
-  state.addedTime   = add * 60;
-  state.countUp     = (dir === 'up');
-  state.timeLeft    = state.countUp ? 0 : state.segDuration;
-  state.currentSeg  = 1;
-  state.running     = false;
+  const matchInProgress = state.matchStarted && !state.matchOver;
+  state.totalSegs = Math.min(8, Math.max(1, n));
+  state.countUp   = (dir === 'up');
+  if (!matchInProgress) {
+    if (state.running) stopTimer();
+    state.segDuration = dur * 60;
+    state.addedTime   = add * 60;
+    state.timeLeft    = state.countUp ? 0 : state.segDuration;
+    state.currentSeg  = 1;
+    state.running     = false;
+  }
   saveSettings();
   renderAll();
 }
@@ -1127,12 +1142,49 @@ function nextSegment() {
   }
 }
 
-function addInjuryTime() {
-  const add = parseInt(document.getElementById('setAddedTime').value) || 0;
-  if (add <= 0) { alert('Set injury time minutes in Setup first.'); return; }
-  if (!state.countUp) state.timeLeft += add * 60;
-  logEvent('⏱ +' + add + ' injury time added');
+function addInjuryTime(mins) {
+  const secs = (mins || 1) * 60;
+  if (state.countUp) {
+    state.addedTime = (state.addedTime || 0) + secs;
+  } else {
+    state.timeLeft += secs;
+  }
+  logEvent('⏱ +' + mins + ' min injury time added');
   renderTimer();
+}
+
+function showSkipTimer() {
+  const panel = document.getElementById('skipTimerPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  const hint = document.getElementById('skipTimerHint');
+  const dur = Math.round(state.segDuration / 60);
+  hint.textContent = state.countUp
+    ? 'Count-up mode: enter the minute you want to jump to (0–' + dur + ').'
+    : 'Count-down mode: enter minutes already played (e.g. 18 = ' + dur + '−18 = ' + (dur - 18) + ' min left).';
+}
+
+function hideSkipTimer() {
+  document.getElementById('skipTimerPanel').style.display = 'none';
+}
+
+function applySkipTimer() {
+  const val = parseInt(document.getElementById('skipMinInput').value);
+  if (isNaN(val) || val < 0) {
+    document.getElementById('skipTimerHint').textContent = '⚠️ Enter a valid number of minutes.';
+    return;
+  }
+  const wasRunning = state.running;
+  if (wasRunning) stopTimer();
+  if (state.countUp) {
+    state.timeLeft = Math.min(val * 60, state.segDuration + state.addedTime);
+  } else {
+    const played = Math.min(val * 60, state.segDuration);
+    state.timeLeft = state.segDuration - played;
+  }
+  logEvent('⏩ Timer jumped to ' + val + ' min');
+  hideSkipTimer();
+  renderTimer();
+  if (wasRunning) startTimer();
 }
 
 // ═══════════════════════════════════════════════
@@ -1297,7 +1349,7 @@ function renderTimer() {
   const sn = segTypeName();
   const dur = Math.round(state.segDuration/60);
   document.getElementById('timerSub').textContent = sn + ' ' + state.currentSeg + ' · ' + dur + ' min';
-  document.getElementById('addedDisplay').textContent = Math.round(state.addedTime/60);
+  // addedTime shown live via +1/+2/+3/+5 buttons
 }
 
 function renderAll() {
