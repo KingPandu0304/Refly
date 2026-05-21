@@ -1077,6 +1077,8 @@ function segTypeName() {
 // ═══════════════════════════════════════════════
 function startTimer() {
   if (state.running) return;
+  // Always clear any stale interval before starting a new one
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
   state.running = true;
   state.matchStarted = true;
   document.getElementById('startBtn').textContent = '▶ Running';
@@ -1084,22 +1086,33 @@ function startTimer() {
   document.getElementById('matchStatusBanner').classList.add('show');
 
   timerInterval = setInterval(() => {
+    // Guard: if somehow called after stop, bail out
+    if (!state.running) { clearInterval(timerInterval); timerInterval = null; return; }
+
     if (state.countUp) {
       state.timeLeft++;
       const totalSeg = state.segDuration + state.addedTime;
-      if (state.timeLeft >= totalSeg) { state.timeLeft = totalSeg; onSegmentEnd(); }
       if (document.getElementById('tog5min').checked) {
         const remaining = totalSeg - state.timeLeft;
         if (remaining === 300) { doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining'); doVibrate([200,100,200]); }
       }
+      if (state.timeLeft >= totalSeg) {
+        state.timeLeft = totalSeg;
+        renderTimer();
+        onSegmentEnd();
+        return;
+      }
     } else {
-      if (state.timeLeft > 0) {
-        state.timeLeft--;
-        if (document.getElementById('tog5min').checked && state.timeLeft === 300) {
-          doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining');
-          doVibrate([200,100,200]);
-        }
-        if (state.timeLeft === 0) onSegmentEnd();
+      if (state.timeLeft === 300 && document.getElementById('tog5min').checked) {
+        doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining');
+        doVibrate([200,100,200]);
+      }
+      state.timeLeft--;
+      if (state.timeLeft <= 0) {
+        state.timeLeft = 0;
+        renderTimer();
+        onSegmentEnd();
+        return;
       }
     }
     renderTimer();
@@ -1123,6 +1136,8 @@ function stopTimer() {
 }
 
 function onSegmentEnd() {
+  if (state.segEndFired) return;  // prevent double-fire
+  state.segEndFired = true;
   stopTimer();
   const sn = segTypeName();
   logEvent('🔔 End of ' + sn + ' ' + state.currentSeg);
@@ -1143,6 +1158,7 @@ function nextSegment() {
   stopTimer();
   if (state.currentSeg < state.totalSegs) {
     state.currentSeg++;
+    state.segEndFired = false;
     state.timeLeft = state.countUp ? 0 : state.segDuration;
     logEvent('▶ ' + segTypeName() + ' ' + state.currentSeg + ' started');
     renderAll();
@@ -1423,6 +1439,7 @@ function dismissOverlay() {
   stopSound();
   document.getElementById('overlay').classList.remove('show');
   if (state.currentSeg <= state.totalSegs && !state.matchOver) {
+    state.segEndFired = false;
     state.timeLeft = state.countUp ? 0 : state.segDuration;
     renderAll();
   }
