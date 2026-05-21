@@ -620,6 +620,7 @@ body::after {
   <div class="overlay-title" id="overlayTitle">Half Time</div>
   <div class="overlay-sub" id="overlaySub">Rest — next segment ready</div>
   <div class="overlay-score" id="overlayScore">0 – 0</div>
+  <button id="unmuteBtn" onclick="doSound()" style="display:none;margin-bottom:12px;background:rgba(255,184,0,0.15);border:1px solid rgba(255,184,0,0.4);color:#ffb800;font-family:var(--font-d);font-size:13px;font-weight:800;letter-spacing:0.1em;border-radius:10px;padding:10px 20px;cursor:pointer;">🔇 Tap to play sound</button>
   <button class="overlay-dismiss" onclick="dismissOverlay()">Continue ▶</button>
 </div>
 
@@ -809,7 +810,10 @@ body::after {
     </div>
     <div class="notif-row">
       <div><div class="notif-label">🔊 Whistle sound</div><div class="notif-sub">Play Audio.mp3 at segment end</div></div>
-      <label class="toggle-wrap"><input type="checkbox" id="togSound" checked onchange="saveSettings()"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button onclick="testSound()" style="font-family:var(--font-d);font-size:11px;font-weight:800;letter-spacing:0.08em;background:rgba(0,229,160,0.1);border:1px solid rgba(0,229,160,0.3);color:var(--green);border-radius:20px;padding:5px 12px;cursor:pointer;white-space:nowrap;">▶ Test</button>
+        <label class="toggle-wrap"><input type="checkbox" id="togSound" checked onchange="saveSettings()"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
     </div>
     <div class="notif-row">
       <div><div class="notif-label">⚠️ 5-min warning</div><div class="notif-sub">Alert 5 minutes before end of segment</div></div>
@@ -1459,20 +1463,67 @@ function doVibrate(pattern) {
   }
 }
 
-const whistleAudio = new Audio('./Audio.mp3');
-whistleAudio.preload = 'auto';
-whistleAudio.loop = true;
+let whistleAudio = null;
+
+function getAudio() {
+  if (!whistleAudio) {
+    whistleAudio = new Audio('./Audio.mp3');
+    whistleAudio.preload = 'auto';
+    whistleAudio.loop = true;
+  }
+  return whistleAudio;
+}
+
+// Unlock audio on first user interaction
+let audioUnlocked = false;
+document.addEventListener('click', function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  const a = getAudio();
+  // Silently play+pause to unlock the audio context
+  a.volume = 0;
+  a.play().then(() => {
+    a.pause();
+    a.currentTime = 0;
+    a.volume = 1;
+  }).catch(() => {});
+}, { once: false });
 
 function doSound() {
-  if (document.getElementById('togSound') && document.getElementById('togSound').checked) {
-    whistleAudio.currentTime = 0;
-    whistleAudio.play().catch(() => {});
+  if (!document.getElementById('togSound') || !document.getElementById('togSound').checked) return;
+  const a = getAudio();
+  a.currentTime = 0;
+  a.volume = 1;
+  const p = a.play();
+  if (p && p.catch) {
+    p.catch(err => {
+      // Show tap-to-unmute button on overlay if blocked
+      const btn = document.getElementById('unmuteBtn');
+      if (btn) btn.style.display = 'block';
+    });
+  }
+}
+
+function testSound() {
+  const a = getAudio();
+  a.currentTime = 0;
+  a.volume = 1;
+  const p = a.play();
+  if (p && p.catch) {
+    p.then(() => {
+      setTimeout(() => stopSound(), 3000);
+    }).catch(err => {
+      alert('Audio blocked: ' + err.message + '\n\nTry clicking somewhere else on the page first, then test again.');
+    });
   }
 }
 
 function stopSound() {
+  if (!whistleAudio) return;
   whistleAudio.pause();
   whistleAudio.currentTime = 0;
+  const btn = document.getElementById('unmuteBtn');
+  if (btn) btn.style.display = 'none';
 }
 
 function requestNotifPermission() {
