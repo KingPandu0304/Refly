@@ -1075,69 +1075,92 @@ function segTypeName() {
 // ═══════════════════════════════════════════════
 // TIMER
 // ═══════════════════════════════════════════════
+// Timestamp-based timer — immune to mobile throttling / screen lock
+// state.timerDeadline = Date.now() ms when this segment should end
+// state.elapsedBase   = elapsed seconds already accumulated before last start
+
 function startTimer() {
   if (state.running) return;
-  // Always clear any stale interval before starting a new one
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+
+  // Set a wall-clock deadline based on remaining time
+  const remaining = state.countUp
+    ? (state.segDuration + state.addedTime) - state.timeLeft
+    : state.timeLeft;
+  state.timerDeadline  = Date.now() + remaining * 1000;
+  state.elapsedBase    = state.matchElapsed;
+  state.elapsedStart   = Date.now();
+  state._warned5min    = state._warned5min || false;
+
   state.running = true;
   state.matchStarted = true;
   document.getElementById('startBtn').textContent = '▶ Running';
   document.getElementById('liveDot').style.display = 'inline';
   document.getElementById('matchStatusBanner').classList.add('show');
 
-  timerInterval = setInterval(() => {
-    // Guard: if somehow called after stop, bail out
-    if (!state.running) { clearInterval(timerInterval); timerInterval = null; return; }
+  function tick() {
+    if (!state.running) return;
 
+    const now        = Date.now();
+    const msLeft     = state.timerDeadline - now;
+    const secsLeft   = Math.max(0, Math.ceil(msLeft / 1000));
+    const totalSeg   = state.segDuration + state.addedTime;
+
+    // Update timeLeft from wall clock
     if (state.countUp) {
-      state.timeLeft++;
-      const totalSeg = state.segDuration + state.addedTime;
-      if (document.getElementById('tog5min').checked) {
-        const remaining = totalSeg - state.timeLeft;
-        if (remaining === 300) { doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining'); doVibrate([200,100,200]); }
-      }
-      if (state.timeLeft >= totalSeg) {
-        state.timeLeft = totalSeg;
-        renderTimer();
-        onSegmentEnd();
-        return;
-      }
+      state.timeLeft = totalSeg - secsLeft;
     } else {
-      if (state.timeLeft === 300 && document.getElementById('tog5min').checked) {
-        doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining');
-        doVibrate([200,100,200]);
-      }
-      state.timeLeft--;
-      if (state.timeLeft <= 0) {
-        state.timeLeft = 0;
-        renderTimer();
-        onSegmentEnd();
-        return;
-      }
+      state.timeLeft = secsLeft;
     }
-    renderTimer();
-  }, 1000);
 
-  if (!elapsedInterval) {
-    elapsedInterval = setInterval(() => {
-      if (state.running) {
-        state.matchElapsed++;
-        document.getElementById('matchTimeBadge').textContent = fmt(state.matchElapsed) + ' elapsed';
-      }
-    }, 1000);
+    // Update elapsed from wall clock
+    state.matchElapsed = state.elapsedBase + Math.floor((now - state.elapsedStart) / 1000);
+    document.getElementById('matchTimeBadge').textContent = fmt(state.matchElapsed) + ' elapsed';
+
+    // 5-min warning (fire once)
+    if (!state._warned5min && document.getElementById('tog5min').checked && secsLeft <= 300 && secsLeft > 0) {
+      state._warned5min = true;
+      doNotif('⚠️ 5 minutes left', segTypeName()+' '+state.currentSeg+' — 5 min remaining');
+      doVibrate([200,100,200]);
+    }
+
+    renderTimer();
+
+    if (msLeft <= 0) {
+      state.timeLeft = state.countUp ? totalSeg : 0;
+      renderTimer();
+      onSegmentEnd();
+      return; // don't reschedule
+    }
+
+    // Schedule next tick aligned to next whole second boundary
+    const msToNextSec = msLeft % 1000 || 1000;
+    timerInterval = setTimeout(tick, msToNextSec);
   }
+
+  timerInterval = setTimeout(tick, 200); // first tick soon
 }
 
 function stopTimer() {
   state.running = false;
-  clearInterval(timerInterval); timerInterval = null;
+  clearTimeout(timerInterval); timerInterval = null;
   document.getElementById('startBtn').textContent = '▶ Start';
   document.getElementById('liveDot').style.display = 'none';
 }
 
+// Resync when tab/screen comes back from background
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.running) {
+    // Already running — just let current tick fire; it reads Date.now() so it self-corrects
+    // But if somehow the timeout died, restart tick chain
+    if (!timerInterval) {
+      state.running = false;
+      startTimer();
+    }
+  }
+});
+
 function onSegmentEnd() {
-  if (state.segEndFired) return;  // prevent double-fire
-  state.segEndFired = true;
   stopTimer();
   const sn = segTypeName();
   logEvent('🔔 End of ' + sn + ' ' + state.currentSeg);
@@ -1158,7 +1181,7 @@ function nextSegment() {
   stopTimer();
   if (state.currentSeg < state.totalSegs) {
     state.currentSeg++;
-    state.segEndFired = false;
+    state._warned5min = false;
     state.timeLeft = state.countUp ? 0 : state.segDuration;
     logEvent('▶ ' + segTypeName() + ' ' + state.currentSeg + ' started');
     renderAll();
@@ -1173,6 +1196,10 @@ function addInjuryTime(mins) {
     state.addedTime = (state.addedTime || 0) + secs;
   } else {
     state.timeLeft += secs;
+  }
+  // Extend the wall-clock deadline so timestamp timer stays correct
+  if (state.running && state.timerDeadline) {
+    state.timerDeadline += secs * 1000;
   }
   logEvent('⏱ +' + mins + ' min injury time added');
   renderTimer();
@@ -1209,7 +1236,10 @@ function applySkipTimer() {
   logEvent('⏩ Timer jumped to ' + val + ' min');
   hideSkipTimer();
   renderTimer();
-  if (wasRunning) startTimer();
+  if (wasRunning) {
+    state.running = false; // force startTimer to re-init deadline
+    startTimer();
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1439,7 +1469,7 @@ function dismissOverlay() {
   stopSound();
   document.getElementById('overlay').classList.remove('show');
   if (state.currentSeg <= state.totalSegs && !state.matchOver) {
-    state.segEndFired = false;
+    state._warned5min = false;
     state.timeLeft = state.countUp ? 0 : state.segDuration;
     renderAll();
   }
